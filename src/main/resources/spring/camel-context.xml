@@ -1,0 +1,453 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	   xmlns:camel="http://camel.apache.org/schema/spring"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans 
+       						https://www.springframework.org/schema/beans/spring-beans.xsd
+    						http://camel.apache.org/schema/spring      
+    						https://camel.apache.org/schema/spring/camel-spring.xsd">
+
+	<!-- processors --> 
+    <bean class="co.poc.bmind.processors.SetCorrectoResponseProcessor" id="setCorrectoResponseProcessor"/>
+    <bean class="co.poc.bmind.processors.SetErrorResponseProcess" id="setErrorResponseProcess"/>
+    <bean class="co.poc.bmind.processors.TransformDataProcess" id="transformDataProcess" />
+    <bean class="co.poc.bmind.processors.CompleteResponseWithConversionsProcessor" id="completeResponseWithConversionsProcessor" />
+    <bean class="co.poc.bmind.processors.SetEmpyAplicationsProcess" id="setEmpyAplicationsProcess" />
+    <bean class="co.poc.bmind.processors.HandleFaultProcessor" id="handleFaultProcessor" />
+    <bean class="co.poc.bmind.processors.GetSecurityHeadersProcessor" id="getSecurityHeadersProcessor" />
+    <!-- processors -->
+	<bean class="org.apache.http.conn.ssl.AllowAllHostnameVerifier" id="allowAllHostnameVerifier" />
+	
+	<!-- <camel:sslContextParameters id="sslContextParameters">
+			  <camel:keyManagers
+				  keyPassword="passwordadmin">
+				<camel:keyStore
+					resource="/tmp/keystores/client.ts"
+					password="passwordadmin"/>
+			  </camel:keyManagers>
+	 		</camel:sslContextParameters> -->
+    
+    <!-- Aggregators -->
+    <bean class="co.poc.bmind.aggregators.ApplicationAggregator" id="applicationAggregator" />
+
+	<camelContext xmlns="http://camel.apache.org/schema/spring">
+		<propertyPlaceholder id="properties" location="application.properties"/>
+        
+        <dataFormats>
+            <json unmarshalTypeName="co.poc.bmind.jackson.classes.Aplicaciones" library="Jackson" id="bmindAplicacionesDataFormat" prettyPrint="true" enableFeatures="WRAP_ROOT_VALUE"/>
+            <json unmarshalTypeName="co.poc.bmind.jackson.classes.Aplicacion" library="Jackson" id="bmindAplicacionDataFormat" prettyPrint="true" />
+            <json unmarshalTypeName="co.poc.bmind.jackson.classes.AplicacionRoot" library="Jackson" id="bmindAplicacionRootDataFormat" prettyPrint="true" />
+            <json unmarshalTypeName="co.poc.bmind.jackson.classes.Correcto" library="Jackson" id="bmindCorrectoDataFormat" prettyPrint="true" enableFeatures="WRAP_ROOT_VALUE"/>
+            <json unmarshalTypeName="co.poc.bmind.jackson.classes.Error" library="Jackson" id="bmindErrorDataFormat" prettyPrint="true" enableFeatures="WRAP_ROOT_VALUE"/>
+            <jaxb contextPath="co.edu.uninorte.webservices.schemas" id="uninorteDataFormat" prettyPrint="true"/>
+        </dataFormats>
+		
+		<rest path="/aplicaciones">
+			<post id="getApplicationsServiceA" uri="/getApplications/{applicationId}" produces="application/json">
+				<to uri="direct:getApplicationsRoute"/>
+			</post>
+			<post id="getApplicationsServiceB" uri="/getApplications" produces="application/json">
+				<to uri="direct:getApplicationsRoute"/>
+			</post>
+			<post id="delteApplicationservice" uri="/deleteApplication/{applicationId}" produces="application/json">
+				<to uri="direct:deleteApplictionRoute"/>
+			</post>
+			<post id="addApplicationService" uri="/addApplication" consumes="application/json" produces="application/json">
+				<to uri="direct:addApplicationRoute"/>
+			</post>
+			<post id="updateApplicationService" uri="/updateApplication" consumes="application/json" produces="application/json">
+				<to uri="direct:updateApplicationRoute"/>
+			</post>
+			<get id="testService" uri="/test" produces="text/plain">
+				<to uri="direct:test"/>
+			</get>
+		</rest>
+	  
+	  	<route id="testRoute">
+	  		<from uri="direct:test" />
+	  		<log message="Ruta prueba test" />
+	  		<setBody>
+	  			<constant>Servicio de aplicaciones de Uninorte</constant>
+	  		</setBody>
+	  	</route>
+	  	
+	  	<route id="addApplicationRoute">
+            <from id="fromAddAppliction" uri="direct:addApplicationRoute"/>
+            <setHeader headerName="escribeLog">
+            	<simple>{{escribe.log}}</simple>
+            </setHeader>
+            <process ref="getSecurityHeadersProcessor" />
+            <doTry>
+            	<convertBodyTo type="java.lang.String"/>
+            	<filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: Peticion recibida addApplication \n${body}" />
+	        	</filter>
+	            <unmarshal ref="bmindAplicacionRootDataFormat"/>
+				<process ref="transformDataProcess" />
+				<to uri="velocity:templates/addAplicationTemplate.vm" />
+				
+				<filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: peticion enviada a backend, servicio addAplicacion \n${body}" />
+	        	</filter>
+	        	
+				<setHeader headerName="SOAPAction">
+			        <constant>addAplicacion</constant>
+			    </setHeader>
+			    <to uri="direct:callService"/>
+			    
+			    <filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: respuesta de backend addAplicacion \n${body}" />
+	        	</filter>
+			    
+			    <to uri="direct:prepareConversionRate" />
+			    
+				<to uri="direct:handleApplicationResponse" />
+				<marshal ref="bmindAplicacionDataFormat"/>
+            	<doCatch>
+			    	<exception>java.lang.Exception</exception>
+		            <handled>
+		            	<constant>true</constant>
+		            </handled>
+		            <log loggingLevel="ERROR" message="${exchangeId} - REST SERVICE ::: Error al consumir servicio backend addAplicacion! \n${exception.message}" />
+		            <setHeader headerName="errorMessage">
+                        <simple>Error al consumir servicio addAplicacion! :: ${exception.message}</simple>
+                    </setHeader>
+                    <setHeader headerName="errorCode">
+                        <constant>-1</constant>
+                    </setHeader>
+                    <process ref="setErrorResponseProcess"/>
+                    <marshal ref="bmindErrorDataFormat"/>
+			    </doCatch>
+            </doTry>
+            <convertBodyTo type="java.lang.String"/>
+           	<filter>
+        		<simple>${header.escribeLog} == '1'</simple>
+        		<log message="${exchangeId} - REST SERVICE ::: Respuesta final addApplication \n${body}" />
+        	</filter>
+        </route>
+        
+        <route id="deleteApplictionRoute">
+            <from id="fromDeleteAppliction" uri="direct:deleteApplictionRoute"/>
+            <setHeader headerName="escribeLog">
+            	<simple>{{escribe.log}}</simple>
+            </setHeader>
+            <process ref="getSecurityHeadersProcessor" />
+            <doTry>
+            	<to uri="velocity:templates/deleteAplicationTemplate.vm" />
+				
+				<filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: peticion enviada a backend, servicio deleteAplicacion \n${body}" />
+	        	</filter>
+	        	
+				<setHeader headerName="SOAPAction">
+			        <constant>deleteAplicacione</constant>
+			    </setHeader>
+			    <to uri="direct:callService"/>
+			    
+			    <filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: respuesta de backend, servicio  deleteAplicacion \n${body}" />
+	        	</filter>
+        	
+	        	<choice>
+					<when>
+						<xpath>boolean(//*[local-name()='correcto'])</xpath>
+						<setHeader headerName="codigo">
+							<xpath>(//*[local-name()='codigo'])/text()</xpath>
+						</setHeader>
+						<setHeader headerName="mensaje">
+							<xpath>(//*[local-name()='mensaje'])/text()</xpath>
+						</setHeader>
+						<process ref="setCorrectoResponseProcessor"/>
+						<marshal ref="bmindCorrectoDataFormat"/>
+					</when>
+					<otherwise>
+						<setHeader headerName="errorMessage">
+	                        <xpath>(//*[local-name()='mensaje'])/text()</xpath>
+	                    </setHeader>
+	                    <setHeader headerName="errorCode">
+	                        <xpath>(//*[local-name()='codigo'])/text()</xpath>
+	                    </setHeader>
+						<process ref="setErrorResponseProcess"/>
+						<marshal ref="bmindErrorDataFormat"/>
+					</otherwise>
+				</choice>
+            	<doCatch>
+			    	<exception>java.lang.Exception</exception>
+		            <handled>
+		            	<constant>true</constant>
+		            </handled>
+		            <log loggingLevel="ERROR" message="${exchangeId} - REST SERVICE ::: error al consumir servicio backend deleteAplicacion! \n${exception.message}" />
+		            <process ref="handleFaultProcessor" />
+		            <setHeader headerName="errorMessage">
+                        <xpath>(//*[local-name()='mensaje'])/text()</xpath>
+                    </setHeader>
+                    <setHeader headerName="errorCode">
+                        <xpath>(//*[local-name()='codigo'])/text()</xpath>
+                    </setHeader>
+                    <process ref="setErrorResponseProcess"/>
+                    <marshal ref="bmindErrorDataFormat"/>
+			    </doCatch>
+            </doTry>
+            
+            <convertBodyTo type="java.lang.String" />
+            <filter>
+        		<simple>${header.escribeLog} == '1'</simple>
+        		<log message="${exchangeId} - REST SERVICE ::: Respuesta final deleteApplication \n${body}" />
+        	</filter>
+        </route>
+        
+        <route id="getApplicationsRoute">
+            <from id="fromGetApplictions" uri="direct:getApplicationsRoute"/>
+            <setHeader headerName="escribeLog">
+            	<simple>{{escribe.log}}</simple>
+            </setHeader>
+            <process ref="getSecurityHeadersProcessor" />
+            <filter>
+            	<simple>${header.applicationId} == null</simple>
+            	<setHeader headerName="applicationId">
+            		<constant></constant>
+            	</setHeader>
+            </filter>
+            <doTry>
+            	<to uri="velocity:templates/getAplicationesTemplate.vm" />
+				
+				<filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: peticion enviada a backend, servicio getAplicaciones \n${body}" />
+	        	</filter>
+				
+			    <setHeader headerName="SOAPAction">
+			        <constant>getAplicaciones</constant>
+			    </setHeader>
+			    <to uri="direct:callService"/>
+			    
+			    <filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: respuesta de backend getAplicaciones \n${body}" />
+	        	</filter>
+        	
+	        	<choice>
+					<when>
+						<xpath>boolean(//*[local-name()='aplicaciones'])</xpath>
+						<to uri="direct:prepareConversionRate" />
+						<split strategyRef="applicationAggregator" parallelProcessing="true" >
+							<tokenize xml="true" token="aplicacion" inheritNamespaceTagName="aplicaciones" />
+							<to uri="direct:handleApplicationResponse" />
+						</split>
+						<filter>
+							<simple>${header.tieneAplicaciones} == null</simple>
+							<process ref="setEmpyAplicationsProcess" />
+						</filter>
+						<marshal ref="bmindAplicacionesDataFormat"/>
+					</when>
+					<otherwise>
+						<setHeader headerName="errorMessage">
+	                        <xpath>(//*[local-name()='mensaje'])/text()</xpath>
+	                    </setHeader>
+	                    <setHeader headerName="errorCode">
+	                        <xpath>(//*[local-name()='codigo'])/text()</xpath>
+	                    </setHeader>
+						<process ref="setErrorResponseProcess"/>
+						<marshal ref="bmindErrorDataFormat"/>
+					</otherwise>
+				</choice>
+            	<doCatch>
+			    	<exception>java.lang.Exception</exception>
+		            <handled>
+		            	<constant>true</constant>
+		            </handled>
+		            <log loggingLevel="ERROR" message="${exchangeId} - REST SERVICE ::: Error al consumir servicio backend getAplicaciones! \n${exception.message}" />
+		            <setHeader headerName="errorMessage">
+                        <simple>Error al consumir servicio getAplicaciones! :: ${exception.message}</simple>
+                    </setHeader>
+                    <setHeader headerName="errorCode">
+                        <constant>-1</constant>
+                    </setHeader>
+                    <process ref="setErrorResponseProcess"/>
+                    <marshal ref="bmindErrorDataFormat"/>
+			    </doCatch>
+            </doTry>
+            
+            <convertBodyTo type="java.lang.String"/>
+           	<filter>
+        		<simple>${header.escribeLog} == '1'</simple>
+        		<log message="${exchangeId} - REST SERVICE ::: Respuesta final getApplicaciones \n${body}" />
+        	</filter>
+        </route>
+        
+        <route id="updateApplicationRoute">
+            <from id="fromUpdateAppliction" uri="direct:updateApplicationRoute"/>
+            <setHeader headerName="escribeLog">
+            	<simple>{{escribe.log}}</simple>
+            </setHeader>
+            <process ref="getSecurityHeadersProcessor" />
+            <doTry>
+            	<convertBodyTo type="java.lang.String"/>
+            	<filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: Peticion recibida updateApplication ::: ${body}" />
+	        	</filter>
+	        	
+	            <unmarshal ref="bmindAplicacionRootDataFormat"/>
+				<process ref="transformDataProcess" />
+				<to uri="velocity:templates/addAplicationTemplate.vm" />
+				
+				<filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: peticion enviada a backend, servicio updateAplicacion \n${body}" />
+	        	</filter>
+				
+				<setHeader headerName="SOAPAction">
+			        <constant>updateAplicacion</constant>
+			    </setHeader>
+			    <to uri="direct:callService"/>		
+			    
+			    <filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: respuesta de backend updateAplicacion \n${body}" />
+	        	</filter>	
+			    
+			    <to uri="direct:prepareConversionRate" />
+			    
+			    <to uri="direct:handleApplicationResponse" />
+			    <marshal ref="bmindAplicacionDataFormat"/>
+			    <doCatch>
+			    	<exception>java.lang.Exception</exception>
+		            <handled>
+		            	<constant>true</constant>
+		            </handled>
+		            <log loggingLevel="ERROR" message="${exchangeId} - REST SERVICE ::: Error al consumir servicio del backend updateAplicacion! \n${exception.message}" />
+		            <setHeader headerName="errorMessage">
+                        <simple>Error al consumir servicio updateAplicacion! :: ${exception.message}</simple>
+                    </setHeader>
+                    <setHeader headerName="errorCode">
+                        <constant>-1</constant>
+                    </setHeader>
+                    <process ref="setErrorResponseProcess"/>
+                    <marshal ref="bmindErrorDataFormat"/>
+			    </doCatch>
+            </doTry>
+            
+            <convertBodyTo type="java.lang.String"/>
+           	<filter>
+        		<simple>${header.escribeLog} == '1'</simple>
+        		<log message="${exchangeId} - REST SERVICE ::: Respuesta final updateApplication \n${body}" />
+        	</filter>
+        </route>
+        
+        <route id="handleApplicationResponseRoute">
+        	<from uri="direct:handleApplicationResponse" />
+        	<choice>
+				<when>
+					<xpath>boolean(//*[local-name()='aplicacion'])</xpath>
+					<setBody>
+						<xpath>//*[local-name()='aplicacion']</xpath>
+					</setBody>
+					<unmarshal ref="uninorteDataFormat" />
+					
+					<process ref="completeResponseWithConversionsProcessor" />
+				</when>
+			</choice>
+        </route>
+        
+        <route id="prepareConversionRateRoute">
+        	<from uri="direct:prepareConversionRate"/>
+        	<setProperty propertyName="originalBodyBeforeConvertion">
+				<simple>${body}</simple>
+			</setProperty>
+			
+			<setHeader headerName="rateDate">
+				<simple>${date:now:yyyy-MM-dd}</simple>
+			</setHeader>
+			<setHeader headerName="currencyFrom">
+				<constant>COP</constant>
+			</setHeader>
+			
+			<!-- Consultar tasa de cambio a USD -->
+			<setHeader headerName="currencyTo">
+				<constant>USD</constant>
+			</setHeader>
+			<to uri="direct:getConvertionRate" />
+			<setHeader headerName="conversionRateUSD">
+				<simple>${header.conversionRate}</simple>
+			</setHeader>
+			
+			<!-- Consultar tasa de cambio a EUR -->
+			<setHeader headerName="currencyTo">
+				<constant>EUR</constant>
+			</setHeader>
+			<to uri="direct:getConvertionRate" />
+			<setHeader headerName="conversionRateEUR">
+				<simple>${header.conversionRate}</simple>
+			</setHeader>
+			
+			<setBody>
+				<simple>${property[originalBodyBeforeConvertion]}</simple>
+			</setBody>
+        </route>
+        
+        <route id="getConvertionRateRoute">
+        	<from uri="direct:getConvertionRate" />
+        	<filter>
+        		<simple>${header.CamelHttpPath} != ''</simple>
+        		<setHeader headerName="CamelHttpPath">
+        			<constant></constant>
+        		</setHeader>
+        	</filter>
+        	<doTry>
+        		<to uri="velocity:templates/getConvertionRate.vm" />
+			    
+			    <filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: peticion converter, servicio GetConversionRate \n${body}" />
+	        	</filter>
+			    
+			    <setHeader headerName="CamelHttpMethod">
+			        <constant>POST</constant>
+			    </setHeader>
+			    <setHeader headerName="SOAPAction">
+			        <constant>http://tempuri.org/GetConversionRate</constant>
+			    </setHeader>
+			    <to uri="http4://currencyconverter.kowabunga.net/converter.asmx?bridgeEndpoint=true"/>
+			    <convertBodyTo type="java.lang.String" />
+			    
+			    <filter>
+	        		<simple>${header.escribeLog} == '1'</simple>
+	        		<log message="${exchangeId} - REST SERVICE ::: respuesta converter, servicio GetConversionRate \n${body}" />
+	        	</filter>
+	        	
+			    <setHeader headerName="conversionRate">
+			    	<xpath resultType="java.lang.String">(//*[local-name()='GetConversionRateResult'])/text()</xpath>
+			    </setHeader>
+        		<doCatch>
+			    	<exception>java.lang.Exception</exception>
+		            <handled>
+		            	<constant>true</constant>
+		            </handled>
+		            <log loggingLevel="ERROR" message="${exchangeId} - REST SERVICE ::: Error al consumir servicio GetConversionRate! \n${exception.message}" />
+		            <setHeader headerName="conversionRate">
+                        <constant>0</constant>
+                    </setHeader>
+			    </doCatch>
+        	</doTry>	
+        </route>
+        
+        <route id="callServideRoute">
+        	<from uri="direct:callService" />
+        	<setHeader headerName="CamelHttpMethod">
+		        <constant>POST</constant>
+		    </setHeader>
+		    <setHeader headerName="urlServicio">
+		    	<simple>{{url.uninorte.soap}}</simple>
+		    </setHeader>
+		    <toD uri="${header.urlServicio}?bridgeEndpoint=true&amp;x509HostnameVerifier=allowAllHostnameVerifier"/>
+		    <convertBodyTo type="java.lang.String" />
+        </route>
+        
+	</camelContext>
+</beans>
